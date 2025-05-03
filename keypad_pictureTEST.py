@@ -38,9 +38,9 @@ def take_photo():
     print("📸 Taking photo...")
     try:
         subprocess.run(["libcamera-still", "-o", filename], check=True)
-        print(f"✅ Photo saved to {filename}")
+        print(f"Photo saved to {filename}")
     except subprocess.CalledProcessError:
-        print("❌ Failed to take photo. Is the camera enabled and working?")
+        print("Failed to take photo. Is the camera enabled and working?")
 
 def read_keypad():
     global input_code
@@ -57,7 +57,7 @@ def read_keypad():
                         if input_code == CORRECT_CODE:
                             take_photo()
                         else:
-                            print("❌ Incorrect code")
+                            print("Incorrect code")
                         input_code = ""
                 elif key == '*':  # Clear input
                     print("Input cleared.")
