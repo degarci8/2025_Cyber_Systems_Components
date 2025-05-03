@@ -34,7 +34,7 @@ def take_photo():
         print(f"{i}...")
         time.sleep(1)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = f"/home/pi/picture_{timestamp}.jpg"
+    filename = f"/home/raspberrypi/picture_{timestamp}.jpg"
     print("Taking photo...")
     try:
         subprocess.run(["libcamera-still", "-o", filename], check=True)
