@@ -1,6 +1,7 @@
 import RPi.GPIO as GPIO
 import time
 import subprocess
+import sys
 
 # Keypad layout
 KEYPAD = [
@@ -13,9 +14,7 @@ KEYPAD = [
 ROW_PINS = [17, 27, 22, 5]
 COL_PINS = [23, 24, 25, 16]
 
-# Set your desired passcode here
 CORRECT_CODE = "1234"
-
 input_code = ""
 
 def setup():
@@ -29,18 +28,25 @@ def setup():
         GPIO.setup(col_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 def take_photo():
-    print("Correct code entered! Taking a picture in:")
+    print("Correct code entered. Taking a picture in:")
     for i in range(3, 0, -1):
         print(f"{i}...")
         time.sleep(1)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = f"/home/raspberrypi/picture_{timestamp}.jpg"
+    filename = f"/home/pi/picture_{timestamp}.jpg"
     print("Taking photo...")
     try:
         subprocess.run(["libcamera-still", "-o", filename], check=True)
         print(f"Photo saved to {filename}")
     except subprocess.CalledProcessError:
         print("Failed to take photo. Is the camera enabled and working?")
+    finally:
+        cleanup_and_exit()
+
+def cleanup_and_exit():
+    print("Cleaning up and exiting...")
+    GPIO.cleanup()
+    sys.exit(0)
 
 def read_keypad():
     global input_code
@@ -59,23 +65,26 @@ def read_keypad():
                         else:
                             print("Incorrect code")
                         input_code = ""
-                elif key == '*':  # Clear input
+                elif key == '*':
                     print("Input cleared.")
                     input_code = ""
-                time.sleep(0.3)  # Debounce
+                elif key == '#':
+                    print("Manual exit key pressed.")
+                    cleanup_and_exit()
+                time.sleep(0.3)
         GPIO.output(row_pin, GPIO.LOW)
 
 def main():
     try:
         setup()
-        print("Enter the passcode using the keypad. Press '*' to clear.")
+        print("Enter the passcode using the keypad.")
+        print("Press '*' to clear input, '#' to quit.")
         while True:
             read_keypad()
             time.sleep(0.1)
     except KeyboardInterrupt:
-        print("\nExiting...")
-    finally:
-        GPIO.cleanup()
+        print("Keyboard Interrupt. Exiting...")
+        cleanup_and_exit()
 
 if __name__ == '__main__':
     main()
