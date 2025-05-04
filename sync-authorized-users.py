@@ -16,11 +16,8 @@ from google.cloud import firestore
 # GOOGLE_APPLICATION_CREDENTIALS in your shell, uncomment and set this:
 # os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/pi/your_project/service-account.json"
 
-# Where this script lives
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 # Local storage paths
-DATA_DIR    = os.path.join(PROJECT_DIR, "data")
+DATA_DIR    = "/home/raspberrypi/Projects/data"
 IMAGE_DIR   = os.path.join(DATA_DIR, "images")
 USERS_FILE  = os.path.join(DATA_DIR, "authorized_users.json")
 
