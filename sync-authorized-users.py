@@ -39,12 +39,12 @@ def sync_authorized_users():
         user = doc.to_dict()
         user["id"] = doc.id
 
-        # Download image via the image_url field
-        image_url = user.get("image_url")
-        if image_url:
+        # Download image via the image_id field
+        image_id = user.get("image_id")
+        if image_id:
             local_path = os.path.join(IMAGE_DIR, f"{doc.id}.jpg")
             try:
-                resp = requests.get(image_url)
+                resp = requests.get(image_id)
                 resp.raise_for_status()
                 with open(local_path, "wb") as img:
                     img.write(resp.content)
@@ -53,7 +53,7 @@ def sync_authorized_users():
             except Exception as e:
                 print(f"[!] Failed to download image for {doc.id}: {e}")
         else:
-            print(f"[!] No image_url found for {doc.id}")
+            print(f"[!] No image_id found for {doc.id}")
 
         users.append(user)
 
