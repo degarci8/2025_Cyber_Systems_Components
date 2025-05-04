@@ -9,13 +9,13 @@ import os
 import json
 from google.cloud import firestore, storage
 
-# ─── CONFIGURATION ─────────────────────────────────────────────────────────────
+#  CONFIGURATION 
 
 # (Optional) Hard-code this if you don't export the env var:
 # os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/raspberrypi/Projects/service-account.json"
 
 # Your GCS bucket name
-BUCKET_NAME = "your-bucket-name"
+BUCKET_NAME = "authorized-users-bucket"
 
 # Paths for local storage
 DATA_DIR   = "/home/raspberrypi/Projects/data"
