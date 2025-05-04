@@ -15,7 +15,7 @@ from google.cloud import firestore, storage
 # os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/raspberrypi/Projects/service-account.json"
 
 # GCS bucket where images are stored
-BUCKET_NAME = "your-bucket-name"
+BUCKET_NAME = "authorized-users-bucket"
 
 # Local storage paths
 DATA_DIR    = "/home/raspberrypi/Projects/data"
