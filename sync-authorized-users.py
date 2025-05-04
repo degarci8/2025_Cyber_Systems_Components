@@ -2,73 +2,61 @@
 """
 sync_users.py
 
-Sync authorized_users from Firestore and download their face images.
+Downloads user images from Firestore (image_id = GCS URL).
 """
 
 import os
 import json
-import requests
-from google.cloud import firestore
+from urllib.parse import urlparse
+from google.cloud import firestore, storage
 
-#  CONFIGURATION 
-
-# If you want to hard-code the service account path instead of exporting
-# GOOGLE_APPLICATION_CREDENTIALS in your shell, uncomment and set this:
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/pi/your_project/service-account.json"
-
-# Local storage paths
+# CONFIG
 DATA_DIR    = "/home/raspberrypi/Projects/data"
 IMAGE_DIR   = os.path.join(DATA_DIR, "images")
 USERS_FILE  = os.path.join(DATA_DIR, "authorized_users.json")
 
-#  SETUP 
-
 def setup_directories():
-    """Create data/images folders if they don't exist."""
     os.makedirs(IMAGE_DIR, exist_ok=True)
 
-#  SYNC FUNCTION 
-
 def sync_authorized_users():
-    """Fetch all users from Firestore and download their images locally."""
     db = firestore.Client()
-    print("[*] Starting Firestore sync...")
+    storage_client = storage.Client()
 
     users = []
     for doc in db.collection("authorized_users").stream():
         user = doc.to_dict()
-        user["id"] = doc.id
+        user_id = doc.id
+        user["id"] = user_id
 
-        # Download image via the image_id field
-        image_id = user.get("image_id")
-        if image_id:
-            local_path = os.path.join(IMAGE_DIR, f"{doc.id}.jpg")
-            try:
-                resp = requests.get(image_id)
-                resp.raise_for_status()
-                with open(local_path, "wb") as img:
-                    img.write(resp.content)
-                user["local_image_path"] = local_path
-                print(f"[+] Image downloaded for {doc.id}")
-            except Exception as e:
-                print(f"[!] Failed to download image for {doc.id}: {e}")
-        else:
-            print(f"[!] No image_id found for {doc.id}")
+        image_url = user.get("image_id")
+        if not image_url:
+            print(f"[!] No image_id for {user_id}")
+            users.append(user)
+            continue
+
+        try:
+            parsed = urlparse(image_url)
+            path_parts = parsed.path.lstrip("/").split("/", 1)
+            bucket_name = path_parts[0]
+            blob_name = path_parts[1]
+
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+
+            local_path = os.path.join(IMAGE_DIR, f"{user_id}.jpg")
+            blob.download_to_filename(local_path)
+            user["local_image_path"] = local_path
+            print(f"[+] Downloaded {blob_name} from {bucket_name} → {local_path}")
+        except Exception as e:
+            print(f"[!] Failed to download for {user_id}: {e}")
 
         users.append(user)
 
-    # Write out the JSON file
     with open(USERS_FILE, "w") as f:
         json.dump(users, f, indent=2)
 
-    print(f"[*] Sync complete: {len(users)} users saved to {USERS_FILE}")
-
-#  MAIN 
-
-def main():
-    setup_directories()
-    sync_authorized_users()
+    print(f"[*] Sync complete: {len(users)} users")
 
 if __name__ == "__main__":
-    main()
-
+    setup_directories()
+    sync_authorized_users()
