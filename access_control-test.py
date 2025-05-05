@@ -2,34 +2,33 @@
 """
 access_control.py
 
-Edge device access control:
+Edge device access control using OpenCV LBPH recognizer:
 - Prompt user for 4-digit PIN via keypad
 - Look up PIN in local authorized_users.json
-- If user found, load stored face image and compare to live capture
-- Grant or deny access (servo unlock stub)
+- If user found, detect and match face from live capture to stored image
+- Grant or deny access
 - Log access attempt to local file and to Firestore
 """
 import os
 import json
 import time
+import numpy as np
 from datetime import datetime
-
 import cv2
-import face_recognition
 from pad4pi import rpi_gpio
 from google.cloud import firestore
 
 #  CONFIGURATION 
-PROJECT_DIR = "/home/raspberrypi/Projects"
-DATA_DIR    = os.path.join(PROJECT_DIR, "data")
-IMAGE_DIR   = os.path.join(DATA_DIR, "images")
-USERS_FILE  = os.path.join(DATA_DIR, "authorized_users.json")
-LOG_DIR     = os.path.join(PROJECT_DIR, "logs")
-LOG_FILE    = os.path.join(LOG_DIR, "access.log")
+PROJECT_DIR   = "/home/raspberrypi/Projects"
+DATA_DIR      = os.path.join(PROJECT_DIR, "data")
+IMAGE_DIR     = os.path.join(DATA_DIR, "images")
+USERS_FILE    = os.path.join(DATA_DIR, "authorized_users.json")
+LOG_DIR       = os.path.join(PROJECT_DIR, "logs")
+LOG_FILE      = os.path.join(LOG_DIR, "access.log")
 
-# Keypad pins (adjust to your wiring)
-KEYPAD_ROWS   = [17, 27, 22, 5]
-KEYPAD_COLS   = [23, 24, 25, 16]
+# Updated keypad pins
+KEYPAD_ROWS = [17, 27, 22, 5]
+KEYPAD_COLS = [23, 24, 25, 16]
 KEYPAD_KEYS = [
     ["1", "2", "3", "A"],
     ["4", "5", "6", "B"],
@@ -37,8 +36,9 @@ KEYPAD_KEYS = [
     ["*", "0", "#", "D"]
 ]
 
-# Face match tolerance (lower = stricter)
-MATCH_TOLERANCE = 0.6
+# LBPH face recognizer parameters
+FACE_CONFIDENCE_THRESHOLD = 60.0  # lower is stricter
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # Firestore collection for logging
 LOG_COLLECTION = "access_logs"
@@ -49,7 +49,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # Initialize Firestore client for logging
 db = firestore.Client()
 
-# Setup keypad
+# Initialize keypad
 factory = rpi_gpio.KeypadFactory()
 keypad = factory.create_keypad(keypad=KEYPAD_KEYS, row_pins=KEYPAD_ROWS, col_pins=KEYPAD_COLS)
 
@@ -58,28 +58,33 @@ keypad = factory.create_keypad(keypad=KEYPAD_KEYS, row_pins=KEYPAD_ROWS, col_pin
 def get_pin_input(length=4):
     """Read a fixed-length PIN from the keypad."""
     pin = ""
-
     def key_handler(key):
         nonlocal pin
-        if key in ["A", "B", "C", "D", "*", "#"]:
+        if key in ["A","B","C","D","*","#"]:
             return
         print(key, end="", flush=True)
         pin += key
         if len(pin) >= length:
             keypad.unregisterKeyPressHandler(key_handler)
-
     print("Enter PIN:", end=" ", flush=True)
     keypad.registerKeyPressHandler(key_handler)
-
-    # Wait until PIN is complete
     while len(pin) < length:
         time.sleep(0.1)
     print()
     return pin
 
 
-def capture_face_image():
-    """Capture a single frame from the Pi camera via OpenCV and return RGB image."""
+def detect_face_gray(image):
+    """Detect the first face in a grayscale image and return the ROI."""
+    faces = face_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5)
+    if len(faces) == 0:
+        return None
+    x, y, w, h = faces[0]
+    return image[y:y+h, x:x+w]
+
+
+def capture_face_gray():
+    """Capture a single frame from the Pi camera via OpenCV and return a face ROI in grayscale."""
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Cannot open camera")
@@ -87,31 +92,20 @@ def capture_face_image():
     cap.release()
     if not ret:
         raise RuntimeError("Failed to capture image")
-    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    face = detect_face_gray(gray)
+    if face is None:
+        raise ValueError("No face detected in live image")
+    return face
 
 
 def log_access(user_id, pin, success):
     """Log access locally and to Firestore."""
     timestamp = datetime.utcnow().isoformat()
-    entry = {
-        "timestamp": timestamp,
-        "pin_entered": pin,
-        "user_id": user_id,
-        "success": success
-    }
-    # Local log
+    entry = {"timestamp": timestamp, "pin_entered": pin, "user_id": user_id, "success": success}
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
-    # Firestore log
     db.collection(LOG_COLLECTION).add(entry)
-
-
-def unlock_door(duration=5):
-    """Stub: activate servo to unlock then relock after duration seconds."""
-    print(f"[servo] Unlocking door for {duration}s...")
-    # TODO: implement GPIO PWM for servo here
-    time.sleep(duration)
-    print("[servo] Relocking door")
 
 #  MAIN 
 
@@ -130,17 +124,22 @@ def main():
     print(f"PIN valid for user {user['name']} (ID: {user['id']})")
 
     try:
-        known_image = face_recognition.load_image_file(user['local_image_path'])
-        known_encoding = face_recognition.face_encodings(known_image)[0]
+        # Load and detect face in stored image
+        img = cv2.imread(user['local_image_path'], cv2.IMREAD_GRAYSCALE)
+        stored_face = detect_face_gray(img)
+        if stored_face is None:
+            raise ValueError("No face detected in stored image")
 
-        live_image = capture_face_image()
-        live_encodings = face_recognition.face_encodings(live_image)
-        if not live_encodings:
-            raise ValueError("No face detected")
+        # Capture and detect live face
+        live_face = capture_face_gray()
 
-        match = face_recognition.compare_faces(
-            [known_encoding], live_encodings[0], tolerance=MATCH_TOLERANCE
-        )[0]
+        # Train LBPH recognizer on stored face
+        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer.train([stored_face], np.array([0]))  # label '0'
+
+        # Predict on live face
+        label, confidence = recognizer.predict(live_face)
+        match = (confidence <= FACE_CONFIDENCE_THRESHOLD)
     except Exception as e:
         print(f"Face verification failed: {e}")
         log_access(user['id'], pin, False)
@@ -149,11 +148,9 @@ def main():
     if match:
         print("Access granted")
         log_access(user['id'], pin, True)
-        unlock_door()
     else:
-        print("Access denied: face mismatch")
+        print(f"Access denied: face mismatch (confidence={confidence:.2f})")
         log_access(user['id'], pin, False)
-
 
 if __name__ == "__main__":
     main()
