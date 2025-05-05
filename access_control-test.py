@@ -19,7 +19,7 @@ import RPi.GPIO as GPIO
 import subprocess
 
 # Configuration
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = "/home/raspberrypi/Projects"
 DATA_DIR = os.path.join(PROJECT_DIR, "data")
 IMAGE_DIR = os.path.join(DATA_DIR, "images")
 USERS_FILE = os.path.join(DATA_DIR, "authorized_users.json")
@@ -37,11 +37,10 @@ KEYPAD_KEYS = [
 ]
 
 # Face recognition parameters
-# Haar cascade placed in same directory as this script
-CASCADE_PATH = os.path.join(PROJECT_DIR, 'haarcascade_frontalface_default.xml')
-if not os.path.exists(CASCADE_PATH):
-    raise FileNotFoundError(f"Haar cascade not found at {CASCADE_PATH}. Place the XML file alongside access_control.py.")
-face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
+FACE_CONFIDENCE_THRESHOLD = 60.0
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+)
 LOG_COLLECTION = "access_logs"
 
 # Setup directories and services
@@ -85,7 +84,7 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera with multiple fallbacks
+# Capture face ROI from camera with fallback methods
 def capture_face_gray():
     # Try Picamera2
     try:
@@ -100,13 +99,13 @@ def capture_face_gray():
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         face = detect_face_gray(gray)
         if face is not None:
-            print("Camera capture via Picamera2 successful")
             return face
     except Exception:
         pass
-    # Fallback to OpenCV
+    # Fallback to OpenCV VideoCapture
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    if not cap.isOpened(): cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0)
     if cap.isOpened():
         ret, frame = cap.read()
         cap.release()
@@ -114,7 +113,6 @@ def capture_face_gray():
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             face = detect_face_gray(gray)
             if face is not None:
-                print("Fallback capture via OpenCV successful")
                 return face
     # Final fallback: libcamera-jpeg
     tmp_image = os.path.join(PROJECT_DIR, 'capture.jpg')
@@ -123,11 +121,9 @@ def capture_face_gray():
         img = cv2.imread(tmp_image, cv2.IMREAD_GRAYSCALE)
         face = detect_face_gray(img)
         if face is not None:
-            print("Fallback via libcamera-jpeg successful")
             return face
     except Exception:
         pass
-    print("Error: All camera methods failed")
     return None
 
 # Log access attempts
@@ -139,13 +135,12 @@ def log_access(user_id, pin, success):
     try:
         db.collection(LOG_COLLECTION).add(entry)
     except Exception:
-        print("Warning: Failed to log to Firestore")
+        pass
 
 # Main function
 def main():
     with open(USERS_FILE) as f:
         users = {str(u['pin']): u for u in json.load(f)}
-    print("[DEBUG] Loaded PINs:", list(users.keys()))
 
     pin = get_pin_input()
     user = users.get(pin)
@@ -153,7 +148,6 @@ def main():
         print("Access denied: PIN not recognized")
         log_access(None, pin, False)
         return
-    print(f"User {user['name']} ({user['id']}) PIN valid")
 
     # Stored face
     img = cv2.imread(user['local_image_path'], cv2.IMREAD_GRAYSCALE)
@@ -171,21 +165,15 @@ def main():
         return
 
     # LBPH matching
-    try:
-        recognizer = cv2.face.LBPHFaceRecognizer_create()
-        recognizer.train([stored_face], np.array([0]))
-        label, conf = recognizer.predict(live_face)
-        print(f"DEBUG: label={label}, confidence={conf:.2f}")
-    except Exception as e:
-        print(f"Face verification error: {e}")
-        log_access(user['id'], pin, False)
-        return
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.train([stored_face], np.array([0]))
+    label, conf = recognizer.predict(live_face)
 
     if conf <= FACE_CONFIDENCE_THRESHOLD:
         print("Access granted")
         log_access(user['id'], pin, True)
     else:
-        print(f"Access denied: mismatch (conf={conf:.2f})")
+        print("Access denied: mismatch")
         log_access(user['id'], pin, False)
 
 if __name__ == "__main__":
