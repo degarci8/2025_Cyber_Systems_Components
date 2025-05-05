@@ -16,6 +16,7 @@ from datetime import datetime
 import cv2
 from google.cloud import firestore
 import RPi.GPIO as GPIO
+import subprocess
 
 # Configuration
 PROJECT_DIR = "/home/raspberrypi/Projects"
@@ -84,10 +85,10 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera with fallback methods
+# Capture face ROI from camera with multiple fallbacks
 def capture_face_gray():
-    """Capture a face ROI in grayscale using Picamera2 or OpenCV fallback."""
-    # Try Picamera2 first
+    """Capture a face ROI in grayscale using Picamera2, OpenCV, or libcamera-jpeg fallback."""
+    # Try Picamera2 if available
     try:
         from picamera2 import Picamera2
         picam2 = Picamera2()
@@ -104,30 +105,45 @@ def capture_face_gray():
             return face
         else:
             print("Picamera2 capture: no face detected")
-    except ImportError:
-        print("Picamera2 not installed, falling back to OpenCV VideoCapture")
     except Exception as e:
-        print(f"Picamera2 capture error: {e}")
+        print(f"Picamera2 capture skipped/error: {e}")
 
     # Fallback to OpenCV VideoCapture
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     if not cap.isOpened():
         cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Cannot open camera via OpenCV")
-        return None
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        print("Error: Failed to capture frame via OpenCV")
-        return None
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    face = detect_face_gray(gray)
-    if face is None:
-        print("Error: No face detected in live image")
+    if cap.isOpened():
+        ret, frame = cap.read()
+        cap.release()
+        if ret:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            face = detect_face_gray(gray)
+            if face is not None:
+                print("Fallback capture via OpenCV successful")
+                return face
+            else:
+                print("Fallback OpenCV: no face detected")
+        else:
+            print("Fallback OpenCV: failed to read frame")
     else:
-        print("Fallback capture via OpenCV successful")
-    return face
+        print("Fallback OpenCV: cannot open camera")
+
+    # Final fallback: use libcamera-jpeg
+    tmp_path = "/tmp/capture.jpg"
+    try:
+        subprocess.run(["libcamera-jpeg", "-o", tmp_path, "-n"], check=True)
+        img = cv2.imread(tmp_path, cv2.IMREAD_GRAYSCALE)
+        face = detect_face_gray(img)
+        if face is not None:
+            print("Fallback capture via libcamera-jpeg successful")
+            return face
+        else:
+            print("libcamera-jpeg: no face detected in capture")
+    except Exception as e:
+        print(f"libcamera-jpeg capture failed: {e}")
+
+    print("Error: All camera capture methods failed")
+    return None
 
 # Log access attempts
 def log_access(user_id, pin, success):
