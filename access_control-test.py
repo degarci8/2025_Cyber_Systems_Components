@@ -3,7 +3,7 @@
 access_control.py
 
 Edge device access control using OpenCV LBPH recognizer:
-- Prompt for 4-digit PIN via keypad (or console fallback)
+- Prompt for 4-digit PIN via manual keypad scan
 - Match PIN to user data
 - Perform face detection/matching on stored vs. live image
 - Grant/deny access and log attempts
@@ -16,10 +16,6 @@ from datetime import datetime
 import cv2
 from google.cloud import firestore
 import RPi.GPIO as GPIO
-try:
-    from pad4pi import rpi_gpio
-except ImportError:
-    rpi_gpio = None
 
 # Configuration
 PROJECT_DIR = "/home/raspberrypi/Projects"
@@ -29,6 +25,7 @@ USERS_FILE = os.path.join(DATA_DIR, "authorized_users.json")
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "access.log")
 
+# Keypad configuration (manual scanning)
 KEYPAD_ROWS = [17, 27, 22, 5]
 KEYPAD_COLS = [23, 24, 25, 16]
 KEYPAD_KEYS = [
@@ -38,16 +35,15 @@ KEYPAD_KEYS = [
     ["*","0","#","D"]
 ]
 
+# Face recognition parameters
 FACE_CONFIDENCE_THRESHOLD = 60.0
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 )
 LOG_COLLECTION = "access_logs"
 
-# Setup
+# Setup directories and services
 os.makedirs(LOG_DIR, exist_ok=True)
-
-# Firestore client
 db = firestore.Client()
 
 # GPIO setup
@@ -59,46 +55,28 @@ for pin in KEYPAD_COLS:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# Keypad initialization with fallback
-use_keypad = False
-keypad = None
-if rpi_gpio:
-    try:
-        factory = rpi_gpio.KeypadFactory()
-        keypad = factory.create_keypad(
-            keypad=KEYPAD_KEYS,
-            row_pins=KEYPAD_ROWS,
-            col_pins=KEYPAD_COLS
-        )
-        use_keypad = True
-    except Exception as e:
-        print(f"Warning: Keypad init failed ({e}); falling back to console input.")
-else:
-    print("Warning: pad4pi not installed; falling back to console PIN entry.")
-
+# Function to read PIN by manual keypad scanning
 def get_pin_input(length=4):
-    if use_keypad and keypad:
-        pin = ""
-        def handler(key):
-            nonlocal pin
-            if key not in ['A','B','C','D','*','#']:
-                print(key, end='', flush=True)
-                pin += key
-                if len(pin) >= length:
-                    keypad.unregisterKeyPressHandler(handler)
-        print("Enter PIN:", end=' ', flush=True)
-        keypad.registerKeyPressHandler(handler)
-        while len(pin) < length:
-            time.sleep(0.1)
-        print()
-        return pin
-    else:
-        # Console fallback
-        pin = None
-        while not pin or len(pin) != length or not pin.isdigit():
-            pin = input(f"Enter {length}-digit PIN: ")
-        return pin
+    pin = ""
+    print("Enter PIN:", end=' ', flush=True)
+    while len(pin) < length:
+        for col_idx, col_pin in enumerate(KEYPAD_COLS):
+            GPIO.output(col_pin, GPIO.HIGH)
+            for row_idx, row_pin in enumerate(KEYPAD_ROWS):
+                if GPIO.input(row_pin) == GPIO.HIGH:
+                    key = KEYPAD_KEYS[row_idx][col_idx]
+                    print(key, end='', flush=True)
+                    pin += key
+                    # wait for release
+                    while GPIO.input(row_pin) == GPIO.HIGH:
+                        time.sleep(0.05)
+                    time.sleep(0.2)
+            GPIO.output(col_pin, GPIO.LOW)
+        time.sleep(0.05)
+    print()
+    return pin
 
+# Detect face ROI in grayscale image
 def detect_face_gray(image):
     faces = face_cascade.detectMultiScale(image, 1.1, 5)
     if len(faces) == 0:
@@ -106,19 +84,19 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
+# Capture face ROI from camera
 def capture_face_gray():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Warning: Cannot open camera")
         return None
     ret, frame = cap.read()
     cap.release()
     if not ret:
-        print("Warning: Failed to capture image")
         return None
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return detect_face_gray(gray)
 
+# Log access attempts
 def log_access(user_id, pin, success):
     ts = datetime.utcnow().isoformat()
     entry = {"timestamp": ts, "pin_entered": pin, "user_id": user_id, "success": success}
@@ -129,6 +107,7 @@ def log_access(user_id, pin, success):
     except Exception:
         print("Warning: Failed to log to Firestore")
 
+# Main function
 def main():
     with open(USERS_FILE) as f:
         users = {u['pin']: u for u in json.load(f)}
@@ -139,13 +118,11 @@ def main():
         print("Access denied: PIN not recognized")
         log_access(None, pin, False)
         return
-
     print(f"User {user['name']} ({user['id']}) PIN valid")
+
     # Load stored face
     img = cv2.imread(user['local_image_path'], cv2.IMREAD_GRAYSCALE)
-    stored_face = None
-    if img is not None:
-        stored_face = detect_face_gray(img)
+    stored_face = detect_face_gray(img) if img is not None else None
     if stored_face is None:
         print("Face verification failed: stored image error")
         log_access(user['id'], pin, False)
@@ -158,7 +135,7 @@ def main():
         log_access(user['id'], pin, False)
         return
 
-    # Perform LBPH matching
+    # LBPH matching
     try:
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         recognizer.train([stored_face], np.array([0]))
