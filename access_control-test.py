@@ -84,18 +84,12 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera using Picamera2
-try:
-    from picamera2 import Picamera2
-except ImportError:
-    Picamera2 = None
-
+# Capture face ROI from camera with fallback methods
 def capture_face_gray():
-    """Capture a frame via Picamera2 and return a face ROI in grayscale."""
-    if Picamera2 is None:
-        print("Error: Picamera2 library not available")
-        return None
+    """Capture a face ROI in grayscale using Picamera2 or OpenCV fallback."""
+    # Try Picamera2 first
     try:
+        from picamera2 import Picamera2
         picam2 = Picamera2()
         config = picam2.create_still_configuration(main={"size": (640, 480)})
         picam2.configure(config)
@@ -103,13 +97,36 @@ def capture_face_gray():
         time.sleep(0.1)
         frame = picam2.capture_array()
         picam2.stop()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        face = detect_face_gray(gray)
+        if face is not None:
+            print("Camera capture via Picamera2 successful")
+            return face
+        else:
+            print("Picamera2 capture: no face detected")
+    except ImportError:
+        print("Picamera2 not installed, falling back to OpenCV VideoCapture")
     except Exception as e:
-        print(f"Error: Unable to capture image via Picamera2: {e}")
+        print(f"Picamera2 capture error: {e}")
+
+    # Fallback to OpenCV VideoCapture
+    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Cannot open camera via OpenCV")
+        return None
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        print("Error: Failed to capture frame via OpenCV")
         return None
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face = detect_face_gray(gray)
     if face is None:
         print("Error: No face detected in live image")
+    else:
+        print("Fallback capture via OpenCV successful")
     return face
 
 # Log access attempts
@@ -171,4 +188,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
