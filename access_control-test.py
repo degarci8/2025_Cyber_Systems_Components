@@ -13,26 +13,28 @@ import os
 import json
 import time
 from datetime import datetime
+
 import cv2
 import face_recognition
 from pad4pi import rpi_gpio
 from google.cloud import firestore
 
 #  CONFIGURATION 
-PROJECT_DIR   = "/home/raspberrypi/Projects"
-DATA_DIR      = os.path.join(PROJECT_DIR, "data")
-IMAGE_DIR     = os.path.join(DATA_DIR, "images")
-USERS_FILE    = os.path.join(DATA_DIR, "authorized_users.json")
-LOG_FILE      = os.path.join(PROJECT_DIR, "logs", "access.log")
+PROJECT_DIR = "/home/raspberrypi/Projects"
+DATA_DIR    = os.path.join(PROJECT_DIR, "data")
+IMAGE_DIR   = os.path.join(DATA_DIR, "images")
+USERS_FILE  = os.path.join(DATA_DIR, "authorized_users.json")
+LOG_DIR     = os.path.join(PROJECT_DIR, "logs")
+LOG_FILE    = os.path.join(LOG_DIR, "access.log")
 
-# Keypad pins (example; adjust to your wiring)
+# Keypad pins (adjust to your wiring)
 KEYPAD_ROWS   = [17, 27, 22, 5]
 KEYPAD_COLS   = [23, 24, 25, 16]
-KEYPAD_KEYS   = [
-    ["1","2","3","A"],
-    ["4","5","6","B"],
-    ["7","8","9","C"],
-    ["*","0","#","D"]
+KEYPAD_KEYS = [
+    ["1", "2", "3", "A"],
+    ["4", "5", "6", "B"],
+    ["7", "8", "9", "C"],
+    ["*", "0", "#", "D"]
 ]
 
 # Face match tolerance (lower = stricter)
@@ -42,8 +44,7 @@ MATCH_TOLERANCE = 0.6
 LOG_COLLECTION = "access_logs"
 
 #  SETUP 
-# Ensure logs directory exists
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # Initialize Firestore client for logging
 db = firestore.Client()
@@ -57,15 +58,17 @@ keypad = factory.create_keypad(keypad=KEYPAD_KEYS, row_pins=KEYPAD_ROWS, col_pin
 def get_pin_input(length=4):
     """Read a fixed-length PIN from the keypad."""
     pin = ""
-    print("Enter PIN:", end=" ", flush=True)
+
     def key_handler(key):
         nonlocal pin
-        if key in ["A","B","C","D","*","#"]:
+        if key in ["A", "B", "C", "D", "*", "#"]:
             return
         print(key, end="", flush=True)
         pin += key
         if len(pin) >= length:
             keypad.unregisterKeyPressHandler(key_handler)
+
+    print("Enter PIN:", end=" ", flush=True)
     keypad.registerKeyPressHandler(key_handler)
 
     # Wait until PIN is complete
@@ -74,8 +77,9 @@ def get_pin_input(length=4):
     print()
     return pin
 
- def capture_face_image():
-    """Capture a single frame from the Pi camera via OpenCV."""
+
+def capture_face_image():
+    """Capture a single frame from the Pi camera via OpenCV and return RGB image."""
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Cannot open camera")
@@ -83,14 +87,18 @@ def get_pin_input(length=4):
     cap.release()
     if not ret:
         raise RuntimeError("Failed to capture image")
-    # Convert BGR to RGB for face_recognition
     return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
 
 def log_access(user_id, pin, success):
     """Log access locally and to Firestore."""
     timestamp = datetime.utcnow().isoformat()
-    entry = {"timestamp": timestamp, "pin_entered": pin, "user_id": user_id, "success": success}
+    entry = {
+        "timestamp": timestamp,
+        "pin_entered": pin,
+        "user_id": user_id,
+        "success": success
+    }
     # Local log
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -122,15 +130,17 @@ def main():
     print(f"PIN valid for user {user['name']} (ID: {user['id']})")
 
     try:
-        # Load known face encoding
         known_image = face_recognition.load_image_file(user['local_image_path'])
         known_encoding = face_recognition.face_encodings(known_image)[0]
-        # Capture live image
+
         live_image = capture_face_image()
         live_encodings = face_recognition.face_encodings(live_image)
         if not live_encodings:
             raise ValueError("No face detected")
-        match = face_recognition.compare_faces([known_encoding], live_encodings[0], tolerance=MATCH_TOLERANCE)[0]
+
+        match = face_recognition.compare_faces(
+            [known_encoding], live_encodings[0], tolerance=MATCH_TOLERANCE
+        )[0]
     except Exception as e:
         print(f"Face verification failed: {e}")
         log_access(user['id'], pin, False)
@@ -143,6 +153,7 @@ def main():
     else:
         print("Access denied: face mismatch")
         log_access(user['id'], pin, False)
+
 
 if __name__ == "__main__":
     main()
