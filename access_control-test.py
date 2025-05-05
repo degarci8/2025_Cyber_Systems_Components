@@ -37,7 +37,7 @@ KEYPAD_KEYS = [
 ]
 
 # Face recognition parameters
-FACE_CONFIDENCE_THRESHOLD = 70.0
+FACE_CONFIDENCE_THRESHOLD = 60.0
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 )
