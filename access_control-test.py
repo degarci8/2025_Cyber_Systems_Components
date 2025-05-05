@@ -84,27 +84,25 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera with multiple backends
+# Capture face ROI from camera using PiCamera
+from picamera import PiCamera
+from picamera.array import PiRGBArray
+
 def capture_face_gray():
-    # Try different backends for Raspberry Pi camera
-    backends = [cv2.CAP_ANY, cv2.CAP_V4L2]
-    if hasattr(cv2, 'CAP_LIBCAMERA'):
-        backends.insert(0, cv2.CAP_LIBCAMERA)
-    cap = None
-    for api in backends:
-        cap = cv2.VideoCapture(0, api)
-        if cap.isOpened():
-            print(f"Camera opened with backend={api}")
-            break
-    else:
-        print("Error: Cannot open camera with any backend")
+    """Capture a single frame from the Pi camera via picamera and return a face ROI in grayscale."""
+    try:
+        camera = PiCamera()
+        camera.resolution = (640, 480)
+        raw_capture = PiRGBArray(camera)
+        # allow camera to warm up
+        time.sleep(0.1)
+        camera.capture(raw_capture, format="bgr")
+        frame = raw_capture.array
+        camera.close()
+    except Exception as e:
+        print(f"Error: Unable to capture image via PiCamera: {e}")
         return None
 
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        print("Error: Failed to capture frame")
-        return None
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face = detect_face_gray(gray)
     if face is None:
