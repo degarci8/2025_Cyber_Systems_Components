@@ -110,7 +110,8 @@ def log_access(user_id, pin, success):
 # Main function
 def main():
     with open(USERS_FILE) as f:
-        users = {u['pin']: u for u in json.load(f)}
+        users = {str(u['pin']): u for u in json.load(f)}
+    print("[DEBUG] Loaded PINs:", list(users.keys()))
 
     pin = get_pin_input()
     user = users.get(pin)
