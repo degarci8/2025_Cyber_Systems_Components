@@ -84,17 +84,32 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera
+# Capture face ROI from camera with multiple backends
 def capture_face_gray():
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
+    # Try different backends for Raspberry Pi camera
+    backends = [cv2.CAP_ANY, cv2.CAP_V4L2]
+    if hasattr(cv2, 'CAP_LIBCAMERA'):
+        backends.insert(0, cv2.CAP_LIBCAMERA)
+    cap = None
+    for api in backends:
+        cap = cv2.VideoCapture(0, api)
+        if cap.isOpened():
+            print(f"Camera opened with backend={api}")
+            break
+    else:
+        print("Error: Cannot open camera with any backend")
         return None
+
     ret, frame = cap.read()
     cap.release()
     if not ret:
+        print("Error: Failed to capture frame")
         return None
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return detect_face_gray(gray)
+    face = detect_face_gray(gray)
+    if face is None:
+        print("Error: No face detected in live image")
+    return face
 
 # Log access attempts
 def log_access(user_id, pin, success):
@@ -155,3 +170,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
