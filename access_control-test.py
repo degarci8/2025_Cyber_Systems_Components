@@ -18,7 +18,7 @@ import cv2
 from pad4pi import rpi_gpio
 from google.cloud import firestore
 
-#  CONFIGURATION 
+# ─── CONFIGURATION ─────────────────────────────────────────────────────────────
 PROJECT_DIR   = "/home/raspberrypi/Projects"
 DATA_DIR      = os.path.join(PROJECT_DIR, "data")
 IMAGE_DIR     = os.path.join(DATA_DIR, "images")
@@ -43,17 +43,22 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 # Firestore collection for logging
 LOG_COLLECTION = "access_logs"
 
-#  SETUP 
+# ─── SETUP ──────────────────────────────────────────────────────────────────────
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Initialize Firestore client for logging
 db = firestore.Client()
 
+# Initialize RPi.GPIO to use BCM mode and suppress warnings
+import RPi.GPIO as GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+
 # Initialize keypad
 factory = rpi_gpio.KeypadFactory()
 keypad = factory.create_keypad(keypad=KEYPAD_KEYS, row_pins=KEYPAD_ROWS, col_pins=KEYPAD_COLS)
 
-#  FUNCTIONS 
+# ─── FUNCTIONS ─────────────────────────────────────────────────────────────────
 
 def get_pin_input(length=4):
     """Read a fixed-length PIN from the keypad."""
@@ -107,7 +112,7 @@ def log_access(user_id, pin, success):
         f.write(json.dumps(entry) + "\n")
     db.collection(LOG_COLLECTION).add(entry)
 
-#  MAIN 
+# ─── MAIN ───────────────────────────────────────────────────────────────────────
 
 def main():
     # Load authorized users
