@@ -84,25 +84,28 @@ def detect_face_gray(image):
     x, y, w, h = faces[0]
     return image[y:y+h, x:x+w]
 
-# Capture face ROI from camera using PiCamera
-from picamera import PiCamera
-from picamera.array import PiRGBArray
+# Capture face ROI from camera using Picamera2
+try:
+    from picamera2 import Picamera2
+except ImportError:
+    Picamera2 = None
 
 def capture_face_gray():
-    """Capture a single frame from the Pi camera via picamera and return a face ROI in grayscale."""
-    try:
-        camera = PiCamera()
-        camera.resolution = (640, 480)
-        raw_capture = PiRGBArray(camera)
-        # allow camera to warm up
-        time.sleep(0.1)
-        camera.capture(raw_capture, format="bgr")
-        frame = raw_capture.array
-        camera.close()
-    except Exception as e:
-        print(f"Error: Unable to capture image via PiCamera: {e}")
+    """Capture a frame via Picamera2 and return a face ROI in grayscale."""
+    if Picamera2 is None:
+        print("Error: Picamera2 library not available")
         return None
-
+    try:
+        picam2 = Picamera2()
+        config = picam2.create_still_configuration(main={"size": (640, 480)})
+        picam2.configure(config)
+        picam2.start()
+        time.sleep(0.1)
+        frame = picam2.capture_array()
+        picam2.stop()
+    except Exception as e:
+        print(f"Error: Unable to capture image via Picamera2: {e}")
+        return None
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face = detect_face_gray(gray)
     if face is None:
