@@ -19,7 +19,7 @@ import RPi.GPIO as GPIO
 import subprocess
 
 # Configuration
-PROJECT_DIR = "/home/raspberrypi/Projects"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PROJECT_DIR, "data")
 IMAGE_DIR = os.path.join(DATA_DIR, "images")
 USERS_FILE = os.path.join(DATA_DIR, "authorized_users.json")
@@ -37,10 +37,11 @@ KEYPAD_KEYS = [
 ]
 
 # Face recognition parameters
-FACE_CONFIDENCE_THRESHOLD = 60.0
-face_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-)
+# Haar cascade placed in same directory as this script
+CASCADE_PATH = os.path.join(PROJECT_DIR, 'haarcascade_frontalface_default.xml')
+if not os.path.exists(CASCADE_PATH):
+    raise FileNotFoundError(f"Haar cascade not found at {CASCADE_PATH}. Place the XML file alongside access_control.py.")
+face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
 LOG_COLLECTION = "access_logs"
 
 # Setup directories and services
@@ -56,7 +57,7 @@ for pin in KEYPAD_COLS:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# Function to read PIN by manual keypad scanning
+# Read PIN by manual keypad scanning
 def get_pin_input(length=4):
     pin = ""
     print("Enter PIN:", end=' ', flush=True)
@@ -68,7 +69,6 @@ def get_pin_input(length=4):
                     key = KEYPAD_KEYS[row_idx][col_idx]
                     print(key, end='', flush=True)
                     pin += key
-                    # wait for release
                     while GPIO.input(row_pin) == GPIO.HIGH:
                         time.sleep(0.05)
                     time.sleep(0.2)
@@ -87,13 +87,12 @@ def detect_face_gray(image):
 
 # Capture face ROI from camera with multiple fallbacks
 def capture_face_gray():
-    """Capture a face ROI in grayscale using Picamera2, OpenCV, or libcamera-jpeg fallback."""
-    # Try Picamera2 if available
+    # Try Picamera2
     try:
         from picamera2 import Picamera2
         picam2 = Picamera2()
-        config = picam2.create_still_configuration(main={"size": (640, 480)})
-        picam2.configure(config)
+        cfg = picam2.create_still_configuration(main={"size":(640, 480)})
+        picam2.configure(cfg)
         picam2.start()
         time.sleep(0.1)
         frame = picam2.capture_array()
@@ -103,15 +102,11 @@ def capture_face_gray():
         if face is not None:
             print("Camera capture via Picamera2 successful")
             return face
-        else:
-            print("Picamera2 capture: no face detected")
-    except Exception as e:
-        print(f"Picamera2 capture skipped/error: {e}")
-
-    # Fallback to OpenCV VideoCapture
+    except Exception:
+        pass
+    # Fallback to OpenCV
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(0)
+    if not cap.isOpened(): cap = cv2.VideoCapture(0)
     if cap.isOpened():
         ret, frame = cap.read()
         cap.release()
@@ -121,34 +116,24 @@ def capture_face_gray():
             if face is not None:
                 print("Fallback capture via OpenCV successful")
                 return face
-            else:
-                print("Fallback OpenCV: no face detected")
-        else:
-            print("Fallback OpenCV: failed to read frame")
-    else:
-        print("Fallback OpenCV: cannot open camera")
-
-    # Final fallback: use libcamera-jpeg
-    tmp_path = "/tmp/capture.jpg"
+    # Final fallback: libcamera-jpeg
+    tmp_image = os.path.join(PROJECT_DIR, 'capture.jpg')
     try:
-        subprocess.run(["libcamera-jpeg", "-o", tmp_path, "-n"], check=True)
-        img = cv2.imread(tmp_path, cv2.IMREAD_GRAYSCALE)
+        subprocess.run(["libcamera-jpeg", "-o", tmp_image, "-n"], check=True)
+        img = cv2.imread(tmp_image, cv2.IMREAD_GRAYSCALE)
         face = detect_face_gray(img)
         if face is not None:
-            print("Fallback capture via libcamera-jpeg successful")
+            print("Fallback via libcamera-jpeg successful")
             return face
-        else:
-            print("libcamera-jpeg: no face detected in capture")
-    except Exception as e:
-        print(f"libcamera-jpeg capture failed: {e}")
-
-    print("Error: All camera capture methods failed")
+    except Exception:
+        pass
+    print("Error: All camera methods failed")
     return None
 
 # Log access attempts
 def log_access(user_id, pin, success):
     ts = datetime.utcnow().isoformat()
-    entry = {"timestamp": ts, "pin_entered": pin, "user_id": user_id, "success": success}
+    entry = {"timestamp":ts, "pin_entered":pin, "user_id":user_id, "success":success}
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
     try:
@@ -170,7 +155,7 @@ def main():
         return
     print(f"User {user['name']} ({user['id']}) PIN valid")
 
-    # Load stored face
+    # Stored face
     img = cv2.imread(user['local_image_path'], cv2.IMREAD_GRAYSCALE)
     stored_face = detect_face_gray(img) if img is not None else None
     if stored_face is None:
@@ -178,7 +163,7 @@ def main():
         log_access(user['id'], pin, False)
         return
 
-    # Capture live face
+    # Live face
     live_face = capture_face_gray()
     if live_face is None:
         print("Face verification failed: live capture error")
@@ -189,7 +174,8 @@ def main():
     try:
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         recognizer.train([stored_face], np.array([0]))
-        _, conf = recognizer.predict(live_face)
+        label, conf = recognizer.predict(live_face)
+        print(f"DEBUG: label={label}, confidence={conf:.2f}")
     except Exception as e:
         print(f"Face verification error: {e}")
         log_access(user['id'], pin, False)
