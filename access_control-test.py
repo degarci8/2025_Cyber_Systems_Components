@@ -27,7 +27,7 @@ LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "access.log")
 
 # Pub/Sub setup (replace with your GCP project ID)
-PROJECT_ID = "your-gcp-project-id"
+PROJECT_ID = "iot-cloud-integrated-project"
 TOPIC_NAME = "access-events"
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, TOPIC_NAME)
