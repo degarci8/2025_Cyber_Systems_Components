@@ -6,7 +6,7 @@ Edge device access control using OpenCV LBPH recognizer:
 - Prompt for 4-digit PIN via manual keypad scan
 - Match PIN to user data
 - Perform face detection/matching on stored vs. live image
-- Grant/deny access and log attempts
+- Grant/deny access and log attempts to local file and Pub/Sub
 """
 import os
 import json
@@ -14,7 +14,7 @@ import time
 import numpy as np
 from datetime import datetime
 import cv2
-from google.cloud import firestore
+from google.cloud import firestore, pubsub_v1
 import RPi.GPIO as GPIO
 import subprocess
 
@@ -25,6 +25,12 @@ IMAGE_DIR = os.path.join(DATA_DIR, "images")
 USERS_FILE = os.path.join(DATA_DIR, "authorized_users.json")
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "access.log")
+
+# Pub/Sub setup (replace with your GCP project ID)
+PROJECT_ID = "iot-cloud-integrated-project"
+TOPIC_NAME = "access-events"
+publisher = pubsub_v1.PublisherClient()
+topic_path = publisher.topic_path(PROJECT_ID, TOPIC_NAME)
 
 # Keypad configuration (manual scanning)
 KEYPAD_ROWS = [17, 27, 22, 5]
@@ -86,11 +92,11 @@ def detect_face_gray(image):
 
 # Capture face ROI from camera with fallback methods
 def capture_face_gray():
-    # Try Picamera2
+    # Try Picamera2 first
     try:
         from picamera2 import Picamera2
         picam2 = Picamera2()
-        cfg = picam2.create_still_configuration(main={"size":(640, 480)})
+        cfg = picam2.create_still_configuration(main={"size":(640,480)})
         picam2.configure(cfg)
         picam2.start()
         time.sleep(0.1)
@@ -115,10 +121,10 @@ def capture_face_gray():
             if face is not None:
                 return face
     # Final fallback: libcamera-jpeg
-    tmp_image = os.path.join(PROJECT_DIR, 'capture.jpg')
+    tmp = os.path.join(PROJECT_DIR, 'capture.jpg')
     try:
-        subprocess.run(["libcamera-jpeg", "-o", tmp_image, "-n"], check=True)
-        img = cv2.imread(tmp_image, cv2.IMREAD_GRAYSCALE)
+        subprocess.run(["libcamera-jpeg","-o",tmp,"-n"], check=True)
+        img = cv2.imread(tmp, cv2.IMREAD_GRAYSCALE)
         face = detect_face_gray(img)
         if face is not None:
             return face
@@ -126,56 +132,62 @@ def capture_face_gray():
         pass
     return None
 
-# Log access attempts
+# Log access attempts (local and Pub/Sub)
 def log_access(user_id, pin, success):
-    ts = datetime.utcnow().isoformat()
-    entry = {"timestamp":ts, "pin_entered":pin, "user_id":user_id, "success":success}
+    ts = datetime.utcnow().isoformat()  # high-resolution timestamp
+    entry = {
+        "user_id": user_id,
+        "timestamp": ts,
+        "pin_entered": pin,
+        "access_result": success
+    }
+    # Local log
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
+    # Publish to Pub/Sub
     try:
-        db.collection(LOG_COLLECTION).add(entry)
-    except Exception:
-        pass
+        data = json.dumps(entry).encode('utf-8')
+        future = publisher.publish(topic_path, data)
+        print(f"Published to Pub/Sub: message id {future.result()}")
+    except Exception as e:
+        print(f"Warning: Failed to publish to Pub/Sub: {e}")
 
 # Main function
 def main():
     with open(USERS_FILE) as f:
         users = {str(u['pin']): u for u in json.load(f)}
-
     pin = get_pin_input()
     user = users.get(pin)
     if not user:
         print("Access denied: PIN not recognized")
         log_access(None, pin, False)
         return
+    print(f"User {user['name']} ({user['id']}) PIN valid")
 
     # Stored face
     img = cv2.imread(user['local_image_path'], cv2.IMREAD_GRAYSCALE)
     stored_face = detect_face_gray(img) if img is not None else None
     if stored_face is None:
-        print("Face verification failed: stored image error")
+        print("Face verification skipped: no stored face")
         log_access(user['id'], pin, False)
         return
 
     # Live face
     live_face = capture_face_gray()
     if live_face is None:
-        print("Face verification failed: live capture error")
+        print("Face verification skipped: live capture error")
         log_access(user['id'], pin, False)
         return
 
     # LBPH matching
     recognizer = cv2.face.LBPHFaceRecognizer_create()
     recognizer.train([stored_face], np.array([0]))
-    label, conf = recognizer.predict(live_face)
+    _, conf = recognizer.predict(live_face)
+    print(f"DEBUG: confidence={conf:.2f}")
 
-    if conf <= FACE_CONFIDENCE_THRESHOLD:
-        print("Access granted")
-        log_access(user['id'], pin, True)
-    else:
-        print("Access denied: mismatch")
-        log_access(user['id'], pin, False)
+    result = conf <= FACE_CONFIDENCE_THRESHOLD
+    print("Access granted" if result else "Access denied")
+    log_access(user['id'], pin, result)
 
 if __name__ == "__main__":
     main()
-
